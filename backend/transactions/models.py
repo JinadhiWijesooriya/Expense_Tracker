@@ -8,6 +8,7 @@ class Transaction(models.Model):
 
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='transactions')
     category = models.ForeignKey('categories.Category', on_delete=models.PROTECT, related_name='transactions')
+    account = models.ForeignKey('accounts.Account', on_delete=models.SET_NULL, null=True, blank=True, related_name='transactions')
     amount = models.DecimalField(max_digits=12, decimal_places=2, validators=[MinValueValidator(0.01)])
     type = models.CharField(max_length=10, choices=TRANSACTION_TYPES)
     description = models.CharField(max_length=255, blank=True)

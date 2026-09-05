@@ -17,18 +17,30 @@ import {
 } from 'recharts'
 import './App.css'
 
-type View = 'Dashboard' | 'Transactions' | 'Categories' | 'Budgets' | 'Reports'
+type View = 'Dashboard' | 'Transactions' | 'Accounts' | 'Categories' | 'Budgets' | 'Reports'
 type Mode = 'login' | 'register'
 type TransactionType = 'income' | 'expense'
+type AccountType = 'cash' | 'bank' | 'card' | 'wallet'
 type Currency = 'USD' | 'LKR'
 type ExportFormat = 'pdf' | 'csv'
 type Theme = 'light' | 'dark'
 
 type Category = { id: number; name: string; type: TransactionType }
+type Account = {
+  id: number
+  name: string
+  account_type: AccountType
+  initial_balance: string
+  color: string
+  current_balance: string
+  created_at: string
+}
 type Transaction = {
   id: number
   category: number
   category_name: string
+  account?: number | null
+  account_name?: string
   amount: string
   type: TransactionType
   description: string
@@ -58,7 +70,7 @@ type MonthlyReport = { month: number; type: TransactionType; total: string }
 type CategoryReport = { category__id: number; category__name: string; type: TransactionType; total: string }
 
 const API_BASE = 'http://127.0.0.1:8000/api'
-const nav: View[] = ['Dashboard', 'Transactions', 'Categories', 'Budgets', 'Reports']
+const nav: View[] = ['Dashboard', 'Transactions', 'Accounts', 'Categories', 'Budgets', 'Reports']
 const thisMonth = new Date().getMonth() + 1
 const thisYear = new Date().getFullYear()
 
@@ -112,6 +124,7 @@ function App() {
   const [transactions, setTransactions] = useState<Transaction[]>([])
   const [categories, setCategories] = useState<Category[]>([])
   const [budgets, setBudgets] = useState<Budget[]>([])
+  const [accounts, setAccounts] = useState<Account[]>([])
   const [monthlyReports, setMonthlyReports] = useState<MonthlyReport[]>([])
   const [categoryReports, setCategoryReports] = useState<CategoryReport[]>([])
   const [query, setQuery] = useState('')
@@ -125,6 +138,7 @@ function App() {
   const [editingTransactionId, setEditingTransactionId] = useState<number | null>(null)
   const [editingCategoryId, setEditingCategoryId] = useState<number | null>(null)
   const [editingBudgetId, setEditingBudgetId] = useState<number | null>(null)
+  const [editingAccountId, setEditingAccountId] = useState<number | null>(null)
 
   // Receipt Modal state
   const [activeReceipt, setActiveReceipt] = useState<{ url: string; description: string } | null>(null)
@@ -132,6 +146,7 @@ function App() {
   const [transactionForm, setTransactionForm] = useState({
     type: 'expense' as TransactionType,
     category: '',
+    account: '',
     amount: '',
     description: '',
     date: new Date().toISOString().slice(0, 10),
@@ -139,6 +154,12 @@ function App() {
   const [receiptFile, setReceiptFile] = useState<File | null>(null)
 
   const [categoryForm, setCategoryForm] = useState({ name: '', type: 'expense' as TransactionType })
+  const [accountForm, setAccountForm] = useState({
+    name: '',
+    account_type: 'cash' as AccountType,
+    initial_balance: '0.00',
+    color: '#1f7a70',
+  })
   const [budgetForm, setBudgetForm] = useState({ category: '', amount: '', month: thisMonth, year: thisYear })
 
   const authHeaders = useMemo(
@@ -190,9 +211,11 @@ function App() {
     setTransactions([])
     setCategories([])
     setBudgets([])
+    setAccounts([])
     setEditingTransactionId(null)
     setEditingCategoryId(null)
     setEditingBudgetId(null)
+    setEditingAccountId(null)
     setActiveReceipt(null)
   }
 
@@ -201,12 +224,13 @@ function App() {
     setLoading(true)
     setError('')
     try {
-      const [dashboardData, transactionRows, categoryRows, budgetRows, monthlyRows, categoryReportRows] =
+      const [dashboardData, transactionRows, categoryRows, budgetRows, accountRows, monthlyRows, categoryReportRows] =
         await Promise.all([
           request<DashboardData>('/dashboard/'),
           request<Transaction[]>('/transactions/'),
           request<Category[]>('/categories/'),
           request<Budget[]>('/budgets/'),
+          request<Account[]>('/accounts/'),
           request<MonthlyReport[]>(`/reports/monthly/?year=${targetYear}`),
           request<CategoryReport[]>(`/reports/categories/?year=${targetYear}&month=${targetMonth}`),
         ])
@@ -214,6 +238,7 @@ function App() {
       setTransactions(transactionRows)
       setCategories(categoryRows)
       setBudgets(budgetRows)
+      setAccounts(accountRows)
       setMonthlyReports(monthlyRows)
       setCategoryReports(categoryReportRows)
     } catch (caught) {
@@ -341,6 +366,7 @@ function App() {
     setTransactionForm({
       type: t.type,
       category: String(t.category),
+      account: t.account ? String(t.account) : '',
       amount: t.amount,
       description: t.description,
       date: t.date,
@@ -356,6 +382,7 @@ function App() {
     setTransactionForm({
       type: 'expense',
       category: '',
+      account: '',
       amount: '',
       description: '',
       date: new Date().toISOString().slice(0, 10),
@@ -371,6 +398,9 @@ function App() {
       const formData = new FormData()
       formData.append('type', transactionForm.type)
       formData.append('category', String(transactionForm.category))
+      if (transactionForm.account) {
+        formData.append('account', String(transactionForm.account))
+      }
       formData.append('amount', String(transactionForm.amount))
       formData.append('description', transactionForm.description)
       formData.append('date', transactionForm.date)
@@ -402,6 +432,62 @@ function App() {
           : 'Transaction saved.'
       )
       cancelEditTransaction()
+      await loadData()
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Save failed.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // Account CRUD handlers
+  function startEditAccount(acc: Account) {
+    setEditingAccountId(acc.id)
+    setAccountForm({
+      name: acc.name,
+      account_type: acc.account_type,
+      initial_balance: acc.initial_balance,
+      color: acc.color || '#1f7a70',
+    })
+    setView('Accounts')
+  }
+
+  function cancelEditAccount() {
+    setEditingAccountId(null)
+    setAccountForm({
+      name: '',
+      account_type: 'cash',
+      initial_balance: '0.00',
+      color: '#1f7a70',
+    })
+  }
+
+  async function submitAccount(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setLoading(true)
+    setError('')
+    setNotice('')
+    try {
+      const payload = {
+        name: accountForm.name,
+        account_type: accountForm.account_type,
+        initial_balance: accountForm.initial_balance,
+        color: accountForm.color,
+      }
+      if (editingAccountId) {
+        await request<Account>(`/accounts/${editingAccountId}/`, {
+          method: 'PUT',
+          body: JSON.stringify(payload),
+        })
+        setNotice('Account updated.')
+      } else {
+        await request<Account>('/accounts/', {
+          method: 'POST',
+          body: JSON.stringify(payload),
+        })
+        setNotice('Account created.')
+      }
+      cancelEditAccount()
       await loadData()
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Save failed.')
@@ -681,6 +767,7 @@ function App() {
         {view === 'Transactions' && (
           <TransactionsPage
             categories={typedCategories}
+            accounts={accounts}
             form={transactionForm}
             query={query}
             rows={filteredTransactions}
@@ -695,6 +782,19 @@ function App() {
             onEdit={startEditTransaction}
             onDelete={(id) => deleteItem(`/transactions/${id}/`, 'Transaction deleted.')}
             onViewReceipt={(url, desc) => setActiveReceipt({ url, description: desc })}
+          />
+        )}
+        {view === 'Accounts' && (
+          <AccountsPage
+            accounts={accounts}
+            form={accountForm}
+            currency={currency}
+            editingId={editingAccountId}
+            setForm={setAccountForm}
+            submit={submitAccount}
+            onCancelEdit={cancelEditAccount}
+            onEdit={startEditAccount}
+            onDelete={(id) => deleteItem(`/accounts/${id}/`, 'Account deleted.')}
           />
         )}
         {view === 'Categories' && (
@@ -971,9 +1071,173 @@ function Dashboard({
   )
 }
 
+function AccountsPage({
+  accounts,
+  form,
+  currency,
+  editingId,
+  setForm,
+  submit,
+  onCancelEdit,
+  onEdit,
+  onDelete,
+}: {
+  accounts: Account[]
+  form: { name: string; account_type: AccountType; initial_balance: string; color: string }
+  currency: Currency
+  editingId: number | null
+  setForm: (value: { name: string; account_type: AccountType; initial_balance: string; color: string }) => void
+  submit: (event: FormEvent<HTMLFormElement>) => void
+  onCancelEdit: () => void
+  onEdit: (a: Account) => void
+  onDelete: (id: number) => void
+}) {
+  const symbol = getCurrencySymbol(currency)
+
+  const totalNetWorth = useMemo(() => {
+    return accounts.reduce((acc, a) => acc + Number(a.current_balance || 0), 0)
+  }, [accounts])
+
+  const getAccountIcon = (type: AccountType) => {
+    switch (type) {
+      case 'bank': return '🏦'
+      case 'card': return '💳'
+      case 'wallet': return '👛'
+      default: return '💵'
+    }
+  }
+
+  const getAccountTypeName = (type: AccountType) => {
+    switch (type) {
+      case 'bank': return 'Bank Account'
+      case 'card': return 'Credit Card'
+      case 'wallet': return 'E-Wallet'
+      default: return 'Cash Wallet'
+    }
+  }
+
+  return (
+    <>
+      <div className="net-worth-banner card">
+        <div className="net-worth-info">
+          <p className="eyebrow">TOTAL NET WORTH</p>
+          <h2>{formatMoney(totalNetWorth, currency)}</h2>
+          <small>Calculated real-time across all {accounts.length} linked accounts & wallets</small>
+        </div>
+      </div>
+
+      <section className="columns">
+        <article className="card page">
+          <Title title="Accounts & Wallets" />
+          <div className="accounts-grid">
+            {accounts.length ? (
+              accounts.map((acc) => (
+                <div key={acc.id} className={`account-card ${editingId === acc.id ? 'active-edit' : ''}`}>
+                  <div className="account-card-header">
+                    <div className="account-title">
+                      <span className="account-icon">{getAccountIcon(acc.account_type)}</span>
+                      <div>
+                        <strong>{acc.name}</strong>
+                        <span className="account-type-badge">{getAccountTypeName(acc.account_type)}</span>
+                      </div>
+                    </div>
+                    <div className="actions">
+                      <button
+                        type="button"
+                        className="btn-icon"
+                        title="Edit account"
+                        onClick={() => onEdit(acc)}
+                      >
+                        ✎
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-icon delete"
+                        title="Delete account"
+                        onClick={() => onDelete(acc.id)}
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  </div>
+                  <div className="account-balance-box">
+                    <span className="balance-label">Current Balance</span>
+                    <b className={`balance-amount ${Number(acc.current_balance) < 0 ? 'negative' : ''}`}>
+                      {formatMoney(acc.current_balance, currency)}
+                    </b>
+                  </div>
+                  <div className="account-meta">
+                    <small>Initial: {formatMoney(acc.initial_balance, currency)}</small>
+                  </div>
+                </div>
+              ))
+            ) : (
+              <Empty text="No accounts found. Create your first wallet or bank account." />
+            )}
+          </div>
+        </article>
+
+        <article className="card page">
+          <div className="form-header">
+            <Title title={editingId ? 'Edit account' : 'Add account'} />
+            {editingId && (
+              <button type="button" className="small-ghost" onClick={onCancelEdit}>
+                Cancel Edit
+              </button>
+            )}
+          </div>
+          <form className="stack" onSubmit={submit}>
+            <label>
+              Account / Wallet Name
+              <input
+                required
+                value={form.name}
+                onChange={(event) => setForm({ ...form, name: event.target.value })}
+                placeholder="e.g. Main Checking, Savings, Cash, Visa Card"
+              />
+            </label>
+            <label>
+              Account Type
+              <select
+                value={form.account_type}
+                onChange={(event) => setForm({ ...form, account_type: event.target.value as AccountType })}
+              >
+                <option value="cash">💵 Cash Wallet</option>
+                <option value="bank">🏦 Bank Account</option>
+                <option value="card">💳 Credit Card</option>
+                <option value="wallet">👛 E-Wallet</option>
+              </select>
+            </label>
+            <label>
+              Initial Balance ({symbol})
+              <input
+                required
+                type="number"
+                step="0.01"
+                value={form.initial_balance}
+                onChange={(event) => setForm({ ...form, initial_balance: event.target.value })}
+                placeholder="0.00"
+              />
+            </label>
+            <div className="form-actions">
+              <button className="primary">{editingId ? 'Update account' : 'Save account'}</button>
+              {editingId && (
+                <button type="button" className="ghost" onClick={onCancelEdit}>
+                  Cancel
+                </button>
+              )}
+            </div>
+          </form>
+        </article>
+      </section>
+    </>
+  )
+}
+
 function TransactionsPage({
   rows,
   categories,
+  accounts,
   query,
   form,
   currency,
@@ -990,13 +1254,14 @@ function TransactionsPage({
 }: {
   rows: Transaction[]
   categories: Category[]
+  accounts: Account[]
   query: string
-  form: { type: TransactionType; category: string; amount: string; description: string; date: string }
+  form: { type: TransactionType; category: string; account: string; amount: string; description: string; date: string }
   currency: Currency
   editingId: number | null
   receiptFile: File | null
   setReceiptFile: (file: File | null) => void
-  setForm: (value: { type: TransactionType; category: string; amount: string; description: string; date: string }) => void
+  setForm: (value: { type: TransactionType; category: string; account: string; amount: string; description: string; date: string }) => void
   setQuery: (value: string) => void
   submit: (event: FormEvent<HTMLFormElement>) => void
   onCancelEdit: () => void
@@ -1047,6 +1312,20 @@ function TransactionsPage({
               {categories.map((category) => (
                 <option key={category.id} value={category.id}>
                   {category.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Account / Wallet (Optional)
+            <select
+              value={form.account}
+              onChange={(event) => setForm({ ...form, account: event.target.value })}
+            >
+              <option value="">Default / Select Account</option>
+              {accounts.map((acc) => (
+                <option key={acc.id} value={acc.id}>
+                  {acc.name} ({acc.account_type})
                 </option>
               ))}
             </select>
@@ -1576,7 +1855,7 @@ function Rows({
           <span>
             <strong>{item.description || item.category_name}</strong>
             <small>
-              {item.category_name} | {dateLabel(item.date)}
+              {item.category_name}{item.account_name ? ` • ${item.account_name}` : ''} | {dateLabel(item.date)}
             </small>
           </span>
           <b className={item.type}>
