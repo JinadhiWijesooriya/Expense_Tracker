@@ -9,7 +9,7 @@ class TransactionSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Transaction
-        fields = ('id', 'category', 'category_name', 'amount', 'type', 'description', 'date', 'created_at')
+        fields = ('id', 'category', 'category_name', 'amount', 'type', 'description', 'date', 'receipt', 'created_at')
         read_only_fields = ('id', 'created_at', 'category_name')
 
     def validate_category(self, category):

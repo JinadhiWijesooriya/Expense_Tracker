@@ -33,6 +33,7 @@ type Transaction = {
   type: TransactionType
   description: string
   date: string
+  receipt: string | null
 }
 type Budget = {
   id: number
@@ -125,6 +126,9 @@ function App() {
   const [editingCategoryId, setEditingCategoryId] = useState<number | null>(null)
   const [editingBudgetId, setEditingBudgetId] = useState<number | null>(null)
 
+  // Receipt Modal state
+  const [activeReceipt, setActiveReceipt] = useState<{ url: string; description: string } | null>(null)
+
   const [transactionForm, setTransactionForm] = useState({
     type: 'expense' as TransactionType,
     category: '',
@@ -132,6 +136,8 @@ function App() {
     description: '',
     date: new Date().toISOString().slice(0, 10),
   })
+  const [receiptFile, setReceiptFile] = useState<File | null>(null)
+
   const [categoryForm, setCategoryForm] = useState({ name: '', type: 'expense' as TransactionType })
   const [budgetForm, setBudgetForm] = useState({ category: '', amount: '', month: thisMonth, year: thisYear })
 
@@ -187,6 +193,7 @@ function App() {
     setEditingTransactionId(null)
     setEditingCategoryId(null)
     setEditingBudgetId(null)
+    setActiveReceipt(null)
   }
 
   async function loadData(targetYear = reportYear, targetMonth = reportMonth) {
@@ -338,12 +345,14 @@ function App() {
       description: t.description,
       date: t.date,
     })
+    setReceiptFile(null)
     setView('Transactions')
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
   function cancelEditTransaction() {
     setEditingTransactionId(null)
+    setReceiptFile(null)
     setTransactionForm({
       type: 'expense',
       category: '',
@@ -359,20 +368,39 @@ function App() {
     setError('')
     setNotice('')
     try {
-      const payload = { ...transactionForm, category: Number(transactionForm.category) }
-      if (editingTransactionId) {
-        await request(`/transactions/${editingTransactionId}/`, {
-          method: 'PUT',
-          body: JSON.stringify(payload),
-        })
-        setNotice('Transaction updated successfully.')
-      } else {
-        await request('/transactions/', {
-          method: 'POST',
-          body: JSON.stringify(payload),
-        })
-        setNotice('Transaction saved.')
+      const formData = new FormData()
+      formData.append('type', transactionForm.type)
+      formData.append('category', String(transactionForm.category))
+      formData.append('amount', String(transactionForm.amount))
+      formData.append('description', transactionForm.description)
+      formData.append('date', transactionForm.date)
+      if (receiptFile) {
+        formData.append('receipt', receiptFile)
       }
+
+      const url = editingTransactionId
+        ? `${API_BASE}/transactions/${editingTransactionId}/`
+        : `${API_BASE}/transactions/`
+      const method = editingTransactionId ? 'PUT' : 'POST'
+
+      const response = await fetch(url, {
+        method,
+        headers: { Authorization: `Bearer ${token}` },
+        body: formData,
+      })
+
+      if (!response.ok) {
+        const detail = await response.json().catch(() => null)
+        throw new Error(formatApiError(detail) || 'Failed to save transaction.')
+      }
+
+      setNotice(
+        editingTransactionId
+          ? 'Transaction updated successfully.'
+          : receiptFile
+          ? 'Transaction saved with receipt attachment.'
+          : 'Transaction saved.'
+      )
       cancelEditTransaction()
       await loadData()
     } catch (caught) {
@@ -635,6 +663,7 @@ function App() {
         </header>
         {notice && <p className="notice">{notice}</p>}
         {error && <p className="alert">{error}</p>}
+
         {view === 'Dashboard' && (
           <Dashboard
             dashboard={dashboard}
@@ -646,6 +675,7 @@ function App() {
             theme={theme}
             onEditTransaction={startEditTransaction}
             onDeleteTransaction={(id) => deleteItem(`/transactions/${id}/`, 'Transaction deleted.')}
+            onViewReceipt={(url, desc) => setActiveReceipt({ url, description: desc })}
           />
         )}
         {view === 'Transactions' && (
@@ -656,12 +686,15 @@ function App() {
             rows={filteredTransactions}
             currency={currency}
             editingId={editingTransactionId}
+            receiptFile={receiptFile}
+            setReceiptFile={setReceiptFile}
             setForm={setTransactionForm}
             setQuery={setQuery}
             submit={submitTransaction}
             onCancelEdit={cancelEditTransaction}
             onEdit={startEditTransaction}
             onDelete={(id) => deleteItem(`/transactions/${id}/`, 'Transaction deleted.')}
+            onViewReceipt={(url, desc) => setActiveReceipt({ url, description: desc })}
           />
         )}
         {view === 'Categories' && (
@@ -706,7 +739,51 @@ function App() {
           />
         )}
       </section>
+
+      {/* Lightbox Modal for Receipt Attachment */}
+      {activeReceipt && (
+        <ReceiptModal
+          url={activeReceipt.url}
+          description={activeReceipt.description}
+          onClose={() => setActiveReceipt(null)}
+        />
+      )}
     </main>
+  )
+}
+
+function ReceiptModal({
+  url,
+  description,
+  onClose,
+}: {
+  url: string
+  description: string
+  onClose: () => void
+}) {
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-header">
+          <h3>Receipt Attachment</h3>
+          <button type="button" className="btn-icon" onClick={onClose}>
+            ✕
+          </button>
+        </div>
+        <p className="modal-subtitle">{description || 'Attached Receipt / Bill'}</p>
+        <div className="receipt-preview-box">
+          <img src={url} alt="Receipt Preview" />
+        </div>
+        <div className="modal-actions">
+          <a href={url} target="_blank" rel="noopener noreferrer" className="primary btn-link">
+            <span>↗</span> Open Full Resolution
+          </a>
+          <button type="button" className="ghost" onClick={onClose}>
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
   )
 }
 
@@ -746,6 +823,7 @@ function Dashboard({
   theme,
   onEditTransaction,
   onDeleteTransaction,
+  onViewReceipt,
 }: {
   dashboard: DashboardData | null
   transactions: Transaction[]
@@ -756,8 +834,9 @@ function Dashboard({
   theme: Theme
   onEditTransaction: (t: Transaction) => void
   onDeleteTransaction: (id: number) => void
+  onViewReceipt: (url: string, description: string) => void
 }) {
-  // Construct monthly trend data for AreaChart
+
   const trendData = useMemo(() => {
     return Array.from({ length: 12 }, (_, index) => {
       const m = index + 1
@@ -775,7 +854,6 @@ function Dashboard({
     })
   }, [monthlyReports])
 
-  // Construct category pie data for Donut Chart
   const pieData = useMemo(() => {
     return categoryReports
       .filter((row) => row.type === 'expense')
@@ -869,6 +947,7 @@ function Dashboard({
             currency={currency}
             onEdit={onEditTransaction}
             onDelete={onDeleteTransaction}
+            onViewReceipt={onViewReceipt}
           />
         </article>
         <article className="card">
@@ -899,12 +978,15 @@ function TransactionsPage({
   form,
   currency,
   editingId,
+  receiptFile,
+  setReceiptFile,
   setForm,
   setQuery,
   submit,
   onCancelEdit,
   onEdit,
   onDelete,
+  onViewReceipt,
 }: {
   rows: Transaction[]
   categories: Category[]
@@ -912,12 +994,15 @@ function TransactionsPage({
   form: { type: TransactionType; category: string; amount: string; description: string; date: string }
   currency: Currency
   editingId: number | null
+  receiptFile: File | null
+  setReceiptFile: (file: File | null) => void
   setForm: (value: { type: TransactionType; category: string; amount: string; description: string; date: string }) => void
   setQuery: (value: string) => void
   submit: (event: FormEvent<HTMLFormElement>) => void
   onCancelEdit: () => void
   onEdit: (t: Transaction) => void
   onDelete: (id: number) => void
+  onViewReceipt: (url: string, description: string) => void
 }) {
   const symbol = getCurrencySymbol(currency)
   return (
@@ -935,7 +1020,7 @@ function TransactionsPage({
             </button>
           )}
         </div>
-        <Rows rows={rows} currency={currency} onEdit={onEdit} onDelete={onDelete} activeEditId={editingId} />
+        <Rows rows={rows} currency={currency} onEdit={onEdit} onDelete={onDelete} activeEditId={editingId} onViewReceipt={onViewReceipt} />
       </article>
       <article className="card page">
         <div className="form-header">
@@ -995,6 +1080,16 @@ function TransactionsPage({
               value={form.date}
               onChange={(event) => setForm({ ...form, date: event.target.value })}
             />
+          </label>
+          <label>
+            Receipt / Bill Image (Optional)
+            <input
+              type="file"
+              accept="image/*"
+              className="file-input"
+              onChange={(e) => setReceiptFile(e.target.files?.[0] || null)}
+            />
+            {receiptFile && <small className="file-hint">Attached: {receiptFile.name}</small>}
           </label>
           <div className="form-actions">
             <button className="primary">
@@ -1463,12 +1558,14 @@ function Rows({
   onEdit,
   onDelete,
   activeEditId,
+  onViewReceipt,
 }: {
   rows: Transaction[]
   currency?: Currency
   onEdit?: (t: Transaction) => void
   onDelete?: (id: number) => void
   activeEditId?: number | null
+  onViewReceipt?: (url: string, description: string) => void
 }) {
   if (!rows.length) return <Empty text="No transactions found." />
   return (
@@ -1486,30 +1583,38 @@ function Rows({
             {item.type === 'income' ? '+' : '-'}
             {formatMoney(item.amount, currency)}
           </b>
-          {(onEdit || onDelete) && (
-            <div className="actions row-actions">
-              {onEdit && (
-                <button
-                  type="button"
-                  className="btn-icon"
-                  title="Edit transaction"
-                  onClick={() => onEdit(item)}
-                >
-                  ✎
-                </button>
-              )}
-              {onDelete && (
-                <button
-                  type="button"
-                  className="btn-icon delete"
-                  title="Delete transaction"
-                  onClick={() => onDelete(item.id)}
-                >
-                  ✕
-                </button>
-              )}
-            </div>
-          )}
+          <div className="actions row-actions">
+            {item.receipt && onViewReceipt && (
+              <button
+                type="button"
+                className="btn-icon btn-receipt"
+                title="View Receipt Attachment"
+                onClick={() => onViewReceipt(item.receipt!, item.description || item.category_name)}
+              >
+                🧾
+              </button>
+            )}
+            {onEdit && (
+              <button
+                type="button"
+                className="btn-icon"
+                title="Edit transaction"
+                onClick={() => onEdit(item)}
+              >
+                ✎
+              </button>
+            )}
+            {onDelete && (
+              <button
+                type="button"
+                className="btn-icon delete"
+                title="Delete transaction"
+                onClick={() => onDelete(item.id)}
+              >
+                ✕
+              </button>
+            )}
+          </div>
         </div>
       ))}
     </div>

@@ -12,6 +12,7 @@ class Transaction(models.Model):
     type = models.CharField(max_length=10, choices=TRANSACTION_TYPES)
     description = models.CharField(max_length=255, blank=True)
     date = models.DateField()
+    receipt = models.ImageField(upload_to='receipts/', blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
