@@ -1,5 +1,20 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
+import {
+  Area,
+  AreaChart,
+  Bar,
+  BarChart,
+  Cell,
+  CartesianGrid,
+  Legend,
+  Pie,
+  PieChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts'
 import './App.css'
 
 type View = 'Dashboard' | 'Transactions' | 'Categories' | 'Budgets' | 'Reports'
@@ -7,6 +22,7 @@ type Mode = 'login' | 'register'
 type TransactionType = 'income' | 'expense'
 type Currency = 'USD' | 'LKR'
 type ExportFormat = 'pdf' | 'csv'
+type Theme = 'light' | 'dark'
 
 type Category = { id: number; name: string; type: TransactionType }
 type Transaction = {
@@ -50,6 +66,13 @@ const MONTH_NAMES = [
   'July', 'August', 'September', 'October', 'November', 'December'
 ]
 
+const MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
+const CHART_COLORS = [
+  '#1f7a70', '#0ea5e9', '#f59e0b', '#ec4899', '#8b5cf6',
+  '#10b981', '#f97316', '#6366f1', '#14b8a6', '#e11d48'
+]
+
 const formatMoney = (value: number | string, currency: Currency = 'USD') => {
   const num = Number(value || 0)
   if (currency === 'LKR') {
@@ -74,6 +97,7 @@ const dateLabel = (value: string) =>
 
 function App() {
   const [token, setToken] = useState(() => localStorage.getItem('access_token') || '')
+  const [theme, setTheme] = useState<Theme>(() => (localStorage.getItem('theme') as Theme) || 'light')
   const [currency, setCurrency] = useState<Currency>(() => (localStorage.getItem('currency') as Currency) || 'USD')
   const [view, setView] = useState<View>('Dashboard')
   const [mode, setMode] = useState<Mode>('login')
@@ -115,6 +139,17 @@ function App() {
     () => ({ 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }),
     [token]
   )
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme)
+    localStorage.setItem('theme', theme)
+  }, [theme])
+
+  function toggleTheme() {
+    const nextTheme: Theme = theme === 'light' ? 'dark' : 'light'
+    setTheme(nextTheme)
+    setNotice(`Switched to ${nextTheme} mode.`)
+  }
 
   function changeCurrency(newCurrency: Currency) {
     setCurrency(newCurrency)
@@ -447,6 +482,11 @@ function App() {
   if (!token) {
     return (
       <main className="auth-shell">
+        <div className="auth-theme-toggle">
+          <button type="button" className="theme-switch-btn" onClick={toggleTheme}>
+            {theme === 'light' ? '🌙 Dark Mode' : '☀️ Light Mode'}
+          </button>
+        </div>
         <section className="auth-panel">
           <div className="auth-header">
             <img src="/logo.png" alt="Spendwise Logo" className="auth-logo" />
@@ -564,6 +604,14 @@ function App() {
             </p>
           </div>
           <div className="header-actions">
+            <button
+              type="button"
+              className="theme-switch-btn"
+              onClick={toggleTheme}
+              title={`Switch to ${theme === 'light' ? 'Dark' : 'Light'} Mode`}
+            >
+              {theme === 'light' ? '🌙 Dark' : '☀️ Light'}
+            </button>
             <div className="header-currency-selector">
               <button
                 type="button"
@@ -591,8 +639,11 @@ function App() {
           <Dashboard
             dashboard={dashboard}
             transactions={transactions}
+            monthlyReports={monthlyReports}
+            categoryReports={categoryReports}
             budgetStatus={dashboard?.budget_status || []}
             currency={currency}
+            theme={theme}
             onEditTransaction={startEditTransaction}
             onDeleteTransaction={(id) => deleteItem(`/transactions/${id}/`, 'Transaction deleted.')}
           />
@@ -647,6 +698,7 @@ function App() {
             month={reportMonth}
             format={reportFormat}
             currency={currency}
+            theme={theme}
             loading={loading}
             onPeriodChange={handleReportPeriodChange}
             onFormatChange={setReportFormat}
@@ -658,21 +710,84 @@ function App() {
   )
 }
 
+function CustomTooltip({
+  active,
+  payload,
+  label,
+  currency,
+}: {
+  active?: boolean
+  payload?: any[]
+  label?: string
+  currency: Currency
+}) {
+  if (active && payload && payload.length) {
+    return (
+      <div className="chart-tooltip-box">
+        <p className="chart-tooltip-title">{label}</p>
+        {payload.map((entry, idx) => (
+          <p key={idx} className="chart-tooltip-row" style={{ color: entry.color || entry.fill }}>
+            <span>{entry.name}:</span> <b>{formatMoney(entry.value, currency)}</b>
+          </p>
+        ))}
+      </div>
+    )
+  }
+  return null
+}
+
 function Dashboard({
   dashboard,
   transactions,
+  monthlyReports,
+  categoryReports,
   budgetStatus,
   currency,
+  theme,
   onEditTransaction,
   onDeleteTransaction,
 }: {
   dashboard: DashboardData | null
   transactions: Transaction[]
+  monthlyReports: MonthlyReport[]
+  categoryReports: CategoryReport[]
   budgetStatus: BudgetStatus[]
   currency: Currency
+  theme: Theme
   onEditTransaction: (t: Transaction) => void
   onDeleteTransaction: (id: number) => void
 }) {
+  // Construct monthly trend data for AreaChart
+  const trendData = useMemo(() => {
+    return Array.from({ length: 12 }, (_, index) => {
+      const m = index + 1
+      const income = Number(
+        monthlyReports.find((row) => row.month === m && row.type === 'income')?.total || 0
+      )
+      const expenses = Number(
+        monthlyReports.find((row) => row.month === m && row.type === 'expense')?.total || 0
+      )
+      return {
+        month: MONTH_SHORT[index],
+        Income: income,
+        Expenses: expenses,
+      }
+    })
+  }, [monthlyReports])
+
+  // Construct category pie data for Donut Chart
+  const pieData = useMemo(() => {
+    return categoryReports
+      .filter((row) => row.type === 'expense')
+      .map((row) => ({
+        name: row.category__name,
+        value: Number(row.total),
+      }))
+  }, [categoryReports])
+
+  const gridColor = theme === 'dark' ? '#23304c' : '#eef1f6'
+  const textColor = theme === 'dark' ? '#94a3b8' : '#64748b'
+
   return (
     <>
       <section className="stats">
@@ -681,6 +796,67 @@ function Dashboard({
         <Stat name="Expenses" value={formatMoney(dashboard?.expenses || 0, currency)} detail="All recorded expenses" />
         <Stat name="This month" value={formatMoney(dashboard?.monthly_expenses || 0, currency)} detail="Monthly expense total" />
       </section>
+
+      {/* Interactive Charts Section */}
+      <section className="columns charts-section">
+        <article className="card chart-card">
+          <Title title="Cashflow Trend (Annual)" />
+          <div className="chart-wrapper">
+            <ResponsiveContainer width="100%" height={260}>
+              <AreaChart data={trendData} margin={{ top: 10, right: 20, left: -10, bottom: 0 }}>
+                <defs>
+                  <linearGradient id="incomeGrad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#10b981" stopOpacity={0.4} />
+                    <stop offset="95%" stopColor="#10b981" stopOpacity={0.0} />
+                  </linearGradient>
+                  <linearGradient id="expenseGrad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#f43f5e" stopOpacity={0.4} />
+                    <stop offset="95%" stopColor="#f43f5e" stopOpacity={0.0} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke={gridColor} />
+                <XAxis dataKey="month" stroke={textColor} fontSize={12} tickLine={false} />
+                <YAxis stroke={textColor} fontSize={12} tickLine={false} tickFormatter={(v) => `${v}`} />
+                <Tooltip content={<CustomTooltip currency={currency} />} />
+                <Area type="monotone" dataKey="Income" stroke="#10b981" strokeWidth={2.5} fillOpacity={1} fill="url(#incomeGrad)" />
+                <Area type="monotone" dataKey="Expenses" stroke="#f43f5e" strokeWidth={2.5} fillOpacity={1} fill="url(#expenseGrad)" />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+        </article>
+
+        <article className="card chart-card">
+          <Title title="Category Breakdown" />
+          <div className="chart-wrapper">
+            {pieData.length ? (
+              <ResponsiveContainer width="100%" height={260}>
+                <PieChart>
+                  <Pie
+                    data={pieData}
+                    cx="50%"
+                    cy="50%"
+                    innerRadius={55}
+                    outerRadius={85}
+                    paddingAngle={4}
+                    dataKey="value"
+                  >
+                    {pieData.map((_, index) => (
+                      <Cell key={`cell-${index}`} fill={CHART_COLORS[index % CHART_COLORS.length]} />
+                    ))}
+                  </Pie>
+                  <Tooltip content={<CustomTooltip currency={currency} />} />
+                  <Legend
+                    formatter={(value) => <span style={{ color: textColor, fontSize: '11px', fontWeight: 600 }}>{value}</span>}
+                  />
+                </PieChart>
+              </ResponsiveContainer>
+            ) : (
+              <Empty text="No expense breakdown available for this period." />
+            )}
+          </div>
+        </article>
+      </section>
+
       <section className="columns lower">
         <article className="card">
           <Title title="Recent transactions" />
@@ -1077,6 +1253,7 @@ function ReportsPage({
   month,
   format,
   currency,
+  theme,
   loading,
   onPeriodChange,
   onFormatChange,
@@ -1088,22 +1265,40 @@ function ReportsPage({
   month: number
   format: ExportFormat
   currency: Currency
+  theme: Theme
   loading: boolean
   onPeriodChange: (year: number, month: number) => Promise<void>
   onFormatChange: (format: ExportFormat) => void
   onDownload: (year: number, month: number, format: ExportFormat) => Promise<void>
 }) {
-  const monthly = Array.from({ length: 12 }, (_, index) => {
-    const m = index + 1
-    const income = Number(
-      monthlyReports.find((row) => row.month === m && row.type === 'income')?.total || 0
-    )
-    const expenses = Number(
-      monthlyReports.find((row) => row.month === m && row.type === 'expense')?.total || 0
-    )
-    return { month: m, income, expenses }
-  })
-  const max = Math.max(1, ...monthly.flatMap((row) => [row.income, row.expenses]))
+  const barData = useMemo(() => {
+    return Array.from({ length: 12 }, (_, index) => {
+      const m = index + 1
+      const income = Number(
+        monthlyReports.find((row) => row.month === m && row.type === 'income')?.total || 0
+      )
+      const expenses = Number(
+        monthlyReports.find((row) => row.month === m && row.type === 'expense')?.total || 0
+      )
+      return {
+        month: MONTH_SHORT[index],
+        Income: income,
+        Expenses: expenses,
+      }
+    })
+  }, [monthlyReports])
+
+  const pieData = useMemo(() => {
+    return categoryReports
+      .filter((row) => row.type === 'expense')
+      .map((row) => ({
+        name: row.category__name,
+        value: Number(row.total),
+      }))
+  }, [categoryReports])
+
+  const gridColor = theme === 'dark' ? '#23304c' : '#eef1f6'
+  const textColor = theme === 'dark' ? '#94a3b8' : '#64748b'
 
   return (
     <>
@@ -1167,40 +1362,48 @@ function ReportsPage({
       </div>
 
       <section className="columns">
-        <article className="card page">
-          <Title title={`Annual overview (${year})`} />
-          <div className="report-bars">
-            {monthly.map((row) => (
-              <span key={row.month}>
-                <i
-                  style={{ height: `${Math.max(4, (row.income / max) * 100)}%` }}
-                  title={`Income: ${formatMoney(row.income, currency)}`}
-                />
-                <em
-                  style={{ height: `${Math.max(4, (row.expenses / max) * 100)}%` }}
-                  title={`Expenses: ${formatMoney(row.expenses, currency)}`}
-                />
-                <small>{row.month}</small>
-              </span>
-            ))}
+        <article className="card page chart-card">
+          <Title title={`Annual Comparative Cashflow (${year})`} />
+          <div className="chart-wrapper">
+            <ResponsiveContainer width="100%" height={290}>
+              <BarChart data={barData} margin={{ top: 10, right: 20, left: -10, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke={gridColor} />
+                <XAxis dataKey="month" stroke={textColor} fontSize={12} tickLine={false} />
+                <YAxis stroke={textColor} fontSize={12} tickLine={false} />
+                <Tooltip content={<CustomTooltip currency={currency} />} />
+                <Legend formatter={(value) => <span style={{ color: textColor, fontSize: '12px', fontWeight: 600 }}>{value}</span>} />
+                <Bar dataKey="Income" fill="#10b981" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="Expenses" fill="#f43f5e" radius={[4, 4, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
           </div>
         </article>
-        <article className="card page">
-          <Title title={`Spending by category (${MONTH_NAMES[month - 1]} ${year})`} />
-          <div className="rows">
-            {categoryReports.length ? (
-              categoryReports.map((row) => (
-                <div className="row" key={`${row.category__id}-${row.type}`}>
-                  <i className={row.type}>{row.category__name[0]}</i>
-                  <span>
-                    <strong>{row.category__name}</strong>
-                    <small>{row.type}</small>
-                  </span>
-                  <b className={row.type}>{formatMoney(row.total, currency)}</b>
-                </div>
-              ))
+
+        <article className="card page chart-card">
+          <Title title={`Category Share (${MONTH_NAMES[month - 1]} ${year})`} />
+          <div className="chart-wrapper">
+            {pieData.length ? (
+              <ResponsiveContainer width="100%" height={290}>
+                <PieChart>
+                  <Pie
+                    data={pieData}
+                    cx="50%"
+                    cy="50%"
+                    innerRadius={55}
+                    outerRadius={85}
+                    paddingAngle={4}
+                    dataKey="value"
+                  >
+                    {pieData.map((_, index) => (
+                      <Cell key={`cell-${index}`} fill={CHART_COLORS[index % CHART_COLORS.length]} />
+                    ))}
+                  </Pie>
+                  <Tooltip content={<CustomTooltip currency={currency} />} />
+                  <Legend formatter={(value) => <span style={{ color: textColor, fontSize: '11px', fontWeight: 600 }}>{value}</span>} />
+                </PieChart>
+              </ResponsiveContainer>
             ) : (
-              <Empty text={`No report data for ${MONTH_NAMES[month - 1]} ${year}.`} />
+              <Empty text={`No expense data recorded for ${MONTH_NAMES[month - 1]} ${year}.`} />
             )}
           </div>
         </article>
