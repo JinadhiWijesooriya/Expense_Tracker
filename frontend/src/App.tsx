@@ -80,7 +80,7 @@ type DashboardData = {
 type MonthlyReport = { month: number; type: TransactionType; total: string }
 type CategoryReport = { category__id: number; category__name: string; type: TransactionType; total: string }
 
-const API_BASE = 'http://127.0.0.1:8000/api'
+const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000/api'
 const nav: View[] = ['Dashboard', 'Transactions', 'Accounts', 'Categories', 'Budgets', 'Goals', 'Reports']
 const thisMonth = new Date().getMonth() + 1
 const thisYear = new Date().getFullYear()
