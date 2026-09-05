@@ -1,0 +1,1 @@
+# Django goals app package

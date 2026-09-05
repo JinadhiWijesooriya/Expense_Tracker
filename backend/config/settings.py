@@ -39,6 +39,7 @@ INSTALLED_APPS = [
     "categories",
     "transactions",
     "budgets",
+    "goals",
     "dashboard",
     "reports",
 ]

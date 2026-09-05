@@ -17,7 +17,7 @@ import {
 } from 'recharts'
 import './App.css'
 
-type View = 'Dashboard' | 'Transactions' | 'Accounts' | 'Categories' | 'Budgets' | 'Reports'
+type View = 'Dashboard' | 'Transactions' | 'Accounts' | 'Categories' | 'Budgets' | 'Goals' | 'Reports'
 type Mode = 'login' | 'register'
 type TransactionType = 'income' | 'expense'
 type AccountType = 'cash' | 'bank' | 'card' | 'wallet'
@@ -57,6 +57,17 @@ type Budget = {
   spent: string
   remaining: string
 }
+type Goal = {
+  id: number
+  name: string
+  target_amount: string
+  current_amount: string
+  target_date: string | null
+  color: string
+  percentage: number
+  remaining_amount: string
+  created_at: string
+}
 type BudgetStatus = { id: number; category: string; amount: string; spent: string; remaining: string }
 type DashboardData = {
   income: string
@@ -70,7 +81,7 @@ type MonthlyReport = { month: number; type: TransactionType; total: string }
 type CategoryReport = { category__id: number; category__name: string; type: TransactionType; total: string }
 
 const API_BASE = 'http://127.0.0.1:8000/api'
-const nav: View[] = ['Dashboard', 'Transactions', 'Accounts', 'Categories', 'Budgets', 'Reports']
+const nav: View[] = ['Dashboard', 'Transactions', 'Accounts', 'Categories', 'Budgets', 'Goals', 'Reports']
 const thisMonth = new Date().getMonth() + 1
 const thisYear = new Date().getFullYear()
 
@@ -125,6 +136,7 @@ function App() {
   const [categories, setCategories] = useState<Category[]>([])
   const [budgets, setBudgets] = useState<Budget[]>([])
   const [accounts, setAccounts] = useState<Account[]>([])
+  const [goals, setGoals] = useState<Goal[]>([])
   const [monthlyReports, setMonthlyReports] = useState<MonthlyReport[]>([])
   const [categoryReports, setCategoryReports] = useState<CategoryReport[]>([])
   const [query, setQuery] = useState('')
@@ -139,9 +151,12 @@ function App() {
   const [editingCategoryId, setEditingCategoryId] = useState<number | null>(null)
   const [editingBudgetId, setEditingBudgetId] = useState<number | null>(null)
   const [editingAccountId, setEditingAccountId] = useState<number | null>(null)
+  const [editingGoalId, setEditingGoalId] = useState<number | null>(null)
 
-  // Receipt Modal state
+  // Receipt & Deposit Modal state
   const [activeReceipt, setActiveReceipt] = useState<{ url: string; description: string } | null>(null)
+  const [depositModal, setDepositModal] = useState<{ goalId: number; name: string } | null>(null)
+  const [depositAmount, setDepositAmount] = useState('')
 
   const [transactionForm, setTransactionForm] = useState({
     type: 'expense' as TransactionType,
@@ -152,6 +167,14 @@ function App() {
     date: new Date().toISOString().slice(0, 10),
   })
   const [receiptFile, setReceiptFile] = useState<File | null>(null)
+
+  const [goalForm, setGoalForm] = useState({
+    name: '',
+    target_amount: '',
+    current_amount: '0.00',
+    target_date: '',
+    color: '#1f7a70',
+  })
 
   const [categoryForm, setCategoryForm] = useState({ name: '', type: 'expense' as TransactionType })
   const [accountForm, setAccountForm] = useState({
@@ -212,11 +235,14 @@ function App() {
     setCategories([])
     setBudgets([])
     setAccounts([])
+    setGoals([])
     setEditingTransactionId(null)
     setEditingCategoryId(null)
     setEditingBudgetId(null)
     setEditingAccountId(null)
+    setEditingGoalId(null)
     setActiveReceipt(null)
+    setDepositModal(null)
   }
 
   async function loadData(targetYear = reportYear, targetMonth = reportMonth) {
@@ -224,13 +250,14 @@ function App() {
     setLoading(true)
     setError('')
     try {
-      const [dashboardData, transactionRows, categoryRows, budgetRows, accountRows, monthlyRows, categoryReportRows] =
+      const [dashboardData, transactionRows, categoryRows, budgetRows, accountRows, goalRows, monthlyRows, categoryReportRows] =
         await Promise.all([
           request<DashboardData>('/dashboard/'),
           request<Transaction[]>('/transactions/'),
           request<Category[]>('/categories/'),
           request<Budget[]>('/budgets/'),
           request<Account[]>('/accounts/'),
+          request<Goal[]>('/goals/'),
           request<MonthlyReport[]>(`/reports/monthly/?year=${targetYear}`),
           request<CategoryReport[]>(`/reports/categories/?year=${targetYear}&month=${targetMonth}`),
         ])
@@ -239,6 +266,7 @@ function App() {
       setCategories(categoryRows)
       setBudgets(budgetRows)
       setAccounts(accountRows)
+      setGoals(goalRows)
       setMonthlyReports(monthlyRows)
       setCategoryReports(categoryReportRows)
     } catch (caught) {
@@ -491,6 +519,86 @@ function App() {
       await loadData()
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Save failed.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // Goal CRUD handlers
+  function startEditGoal(g: Goal) {
+    setEditingGoalId(g.id)
+    setGoalForm({
+      name: g.name,
+      target_amount: g.target_amount,
+      current_amount: g.current_amount,
+      target_date: g.target_date || '',
+      color: g.color || '#1f7a70',
+    })
+    setView('Goals')
+  }
+
+  function cancelEditGoal() {
+    setEditingGoalId(null)
+    setGoalForm({
+      name: '',
+      target_amount: '',
+      current_amount: '0.00',
+      target_date: '',
+      color: '#1f7a70',
+    })
+  }
+
+  async function submitGoal(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setLoading(true)
+    setError('')
+    setNotice('')
+    try {
+      const payload = {
+        name: goalForm.name,
+        target_amount: goalForm.target_amount,
+        current_amount: goalForm.current_amount || '0.00',
+        target_date: goalForm.target_date || null,
+        color: goalForm.color,
+      }
+      if (editingGoalId) {
+        await request<Goal>(`/goals/${editingGoalId}/`, {
+          method: 'PUT',
+          body: JSON.stringify(payload),
+        })
+        setNotice('Savings goal updated.')
+      } else {
+        await request<Goal>('/goals/', {
+          method: 'POST',
+          body: JSON.stringify(payload),
+        })
+        setNotice('New savings goal created!')
+      }
+      cancelEditGoal()
+      await loadData()
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Save failed.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function submitDeposit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!depositModal) return
+    setLoading(true)
+    setError('')
+    try {
+      await request<Goal>(`/goals/${depositModal.goalId}/deposit/`, {
+        method: 'POST',
+        body: JSON.stringify({ amount: depositAmount }),
+      })
+      setNotice(`Deposit added to "${depositModal.name}".`)
+      setDepositModal(null)
+      setDepositAmount('')
+      await loadData()
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Deposit failed.')
     } finally {
       setLoading(false)
     }
@@ -823,6 +931,23 @@ function App() {
             onDelete={(id) => deleteItem(`/budgets/${id}/`, 'Budget deleted.')}
           />
         )}
+        {view === 'Goals' && (
+          <GoalsPage
+            goals={goals}
+            form={goalForm}
+            currency={currency}
+            editingId={editingGoalId}
+            setForm={setGoalForm}
+            submit={submitGoal}
+            onCancelEdit={cancelEditGoal}
+            onEdit={startEditGoal}
+            onDelete={(id) => deleteItem(`/goals/${id}/`, 'Goal deleted.')}
+            onOpenDeposit={(goalId, name) => {
+              setDepositModal({ goalId, name })
+              setDepositAmount('')
+            }}
+          />
+        )}
         {view === 'Reports' && (
           <ReportsPage
             monthlyReports={monthlyReports}
@@ -846,6 +971,18 @@ function App() {
           url={activeReceipt.url}
           description={activeReceipt.description}
           onClose={() => setActiveReceipt(null)}
+        />
+      )}
+
+      {/* Modal for Top-Up Savings Deposit */}
+      {depositModal && (
+        <DepositModal
+          goalName={depositModal.name}
+          currency={currency}
+          amount={depositAmount}
+          setAmount={setDepositAmount}
+          onClose={() => setDepositModal(null)}
+          onSubmit={submitDeposit}
         />
       )}
     </main>
@@ -882,6 +1019,58 @@ function ReceiptModal({
             Close
           </button>
         </div>
+      </div>
+    </div>
+  )
+}
+
+function DepositModal({
+  goalName,
+  currency,
+  amount,
+  setAmount,
+  onClose,
+  onSubmit,
+}: {
+  goalName: string
+  currency: Currency
+  amount: string
+  setAmount: (val: string) => void
+  onClose: () => void
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void
+}) {
+  const symbol = getCurrencySymbol(currency)
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal-content deposit-modal-content" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-header">
+          <h3>Top-Up Savings</h3>
+          <button type="button" className="btn-icon" onClick={onClose}>
+            ✕
+          </button>
+        </div>
+        <p className="modal-subtitle">Add savings deposit to <strong>{goalName}</strong></p>
+        <form onSubmit={onSubmit} className="stack">
+          <label>
+            Deposit Amount ({symbol})
+            <input
+              required
+              autoFocus
+              type="number"
+              min="0.01"
+              step="0.01"
+              value={amount}
+              onChange={(e) => setAmount(e.target.value)}
+              placeholder="e.g. 100.00"
+            />
+          </label>
+          <div className="modal-actions">
+            <button className="primary">Add Deposit</button>
+            <button type="button" className="ghost" onClick={onClose}>
+              Cancel
+            </button>
+          </div>
+        </form>
       </div>
     </div>
   )
@@ -1221,6 +1410,189 @@ function AccountsPage({
             </label>
             <div className="form-actions">
               <button className="primary">{editingId ? 'Update account' : 'Save account'}</button>
+              {editingId && (
+                <button type="button" className="ghost" onClick={onCancelEdit}>
+                  Cancel
+                </button>
+              )}
+            </div>
+          </form>
+        </article>
+      </section>
+    </>
+  )
+}
+
+function GoalsPage({
+  goals,
+  form,
+  currency,
+  editingId,
+  setForm,
+  submit,
+  onCancelEdit,
+  onEdit,
+  onDelete,
+  onOpenDeposit,
+}: {
+  goals: Goal[]
+  form: { name: string; target_amount: string; current_amount: string; target_date: string; color: string }
+  currency: Currency
+  editingId: number | null
+  setForm: (value: { name: string; target_amount: string; current_amount: string; target_date: string; color: string }) => void
+  submit: (event: FormEvent<HTMLFormElement>) => void
+  onCancelEdit: () => void
+  onEdit: (g: Goal) => void
+  onDelete: (id: number) => void
+  onOpenDeposit: (goalId: number, name: string) => void
+}) {
+  const symbol = getCurrencySymbol(currency)
+
+  const summary = useMemo(() => {
+    const totalTarget = goals.reduce((acc, g) => acc + Number(g.target_amount || 0), 0)
+    const totalSaved = goals.reduce((acc, g) => acc + Number(g.current_amount || 0), 0)
+    const overallPct = totalTarget > 0 ? Math.min(100, Math.round((totalSaved / totalTarget) * 100)) : 0
+    return { totalTarget, totalSaved, overallPct }
+  }, [goals])
+
+  return (
+    <>
+      <div className="goals-summary-banner card">
+        <div className="goals-summary-info">
+          <p className="eyebrow">SAVINGS OVERVIEW</p>
+          <h2>{formatMoney(summary.totalSaved, currency)} <small>saved of {formatMoney(summary.totalTarget, currency)} target</small></h2>
+          <div className="goals-overall-bar">
+            <em style={{ width: `${summary.overallPct}%` }} />
+          </div>
+          <small>{summary.overallPct}% Total Savings Progress across {goals.length} target goals</small>
+        </div>
+      </div>
+
+      <section className="columns">
+        <article className="card page">
+          <Title title="Target Goals & Milestones" />
+          <div className="goals-grid">
+            {goals.length ? (
+              goals.map((g) => {
+                const isReached = g.percentage >= 100
+                return (
+                  <div key={g.id} className={`goal-card ${editingId === g.id ? 'active-edit' : ''} ${isReached ? 'goal-reached' : ''}`}>
+                    <div className="goal-card-header">
+                      <div className="goal-title">
+                        <span className="goal-icon">🎯</span>
+                        <div>
+                          <strong>{g.name}</strong>
+                          {isReached ? (
+                            <span className="goal-badge completed">🎉 Goal Reached!</span>
+                          ) : (
+                            <span className="goal-badge in-progress">{g.percentage}% Achieved</span>
+                          )}
+                        </div>
+                      </div>
+                      <div className="actions">
+                        <button
+                          type="button"
+                          className="btn-icon"
+                          title="Edit goal"
+                          onClick={() => onEdit(g)}
+                        >
+                          ✎
+                        </button>
+                        <button
+                          type="button"
+                          className="btn-icon delete"
+                          title="Delete goal"
+                          onClick={() => onDelete(g.id)}
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="goal-progress-container">
+                      <div className="goal-progress-bar">
+                        <em style={{ width: `${Math.min(100, g.percentage)}%`, backgroundColor: isReached ? '#10b981' : g.color || '#1f7a70' }} />
+                      </div>
+                      <div className="goal-numbers">
+                        <b>{formatMoney(g.current_amount, currency)}</b>
+                        <small>Target: {formatMoney(g.target_amount, currency)}</small>
+                      </div>
+                    </div>
+
+                    <div className="goal-card-footer">
+                      <small className="goal-subtext">
+                        {isReached ? 'Target Met!' : `Remaining: ${formatMoney(g.remaining_amount, currency)}`}
+                        {g.target_date ? ` • Target: ${dateLabel(g.target_date)}` : ''}
+                      </small>
+                      <button
+                        type="button"
+                        className="btn-deposit"
+                        onClick={() => onOpenDeposit(g.id, g.name)}
+                      >
+                        + Top-Up Savings
+                      </button>
+                    </div>
+                  </div>
+                )
+              })
+            ) : (
+              <Empty text="No savings goals yet. Create a target (e.g., Emergency Fund, Vacation, New Laptop)." />
+            )}
+          </div>
+        </article>
+
+        <article className="card page">
+          <div className="form-header">
+            <Title title={editingId ? 'Edit savings goal' : 'Add savings goal'} />
+            {editingId && (
+              <button type="button" className="small-ghost" onClick={onCancelEdit}>
+                Cancel Edit
+              </button>
+            )}
+          </div>
+          <form className="stack" onSubmit={submit}>
+            <label>
+              Goal Name
+              <input
+                required
+                value={form.name}
+                onChange={(event) => setForm({ ...form, name: event.target.value })}
+                placeholder="e.g. Emergency Fund, New Laptop, Vacation"
+              />
+            </label>
+            <label>
+              Target Amount ({symbol})
+              <input
+                required
+                type="number"
+                min="0.01"
+                step="0.01"
+                value={form.target_amount}
+                onChange={(event) => setForm({ ...form, target_amount: event.target.value })}
+                placeholder="e.g. 2000.00"
+              />
+            </label>
+            <label>
+              Current Saved Amount ({symbol})
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                value={form.current_amount}
+                onChange={(event) => setForm({ ...form, current_amount: event.target.value })}
+                placeholder="0.00"
+              />
+            </label>
+            <label>
+              Target Completion Date (Optional)
+              <input
+                type="date"
+                value={form.target_date}
+                onChange={(event) => setForm({ ...form, target_date: event.target.value })}
+              />
+            </label>
+            <div className="form-actions">
+              <button className="primary">{editingId ? 'Update goal' : 'Save goal'}</button>
               {editingId && (
                 <button type="button" className="ghost" onClick={onCancelEdit}>
                   Cancel
